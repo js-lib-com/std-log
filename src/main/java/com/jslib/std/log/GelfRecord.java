@@ -3,12 +3,17 @@ package com.jslib.std.log;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.io.UnsupportedEncodingException;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 
 class GelfRecord
 {
   private static final String DEF_VERSION = "1.1";
+
+  private final String message;
+  private final Object[] arguments;
+  private final long baseTimestamp;
 
   private String version;
   private String host;
@@ -19,13 +24,29 @@ class GelfRecord
 
   private final LinkedHashMap<String, Object> fields;
 
-  public GelfRecord()
+  public GelfRecord(String message, Object... arguments)
   {
+    this.message = message;
+    this.arguments = arguments;
+
     this.version = DEF_VERSION;
-    this.timestamp = System.currentTimeMillis() / 1000.0;
     this.level = SyslogLevel.ALERT.ordinal();
 
+    long timestamp = System.currentTimeMillis();
+    this.timestamp = timestamp / 1000D;
+    this.baseTimestamp = timestamp / 1000;
+
     this.fields = new LinkedHashMap<>();
+  }
+
+  public String getMessage()
+  {
+    return message;
+  }
+
+  public Object[] getArguments()
+  {
+    return arguments;
   }
 
   public void setVersion(String version)
@@ -78,6 +99,11 @@ class GelfRecord
     return timestamp;
   }
 
+  public long getBaseTimestamp()
+  {
+    return baseTimestamp;
+  }
+
   public void setLevel(SyslogLevel level)
   {
     this.level = level.ordinal();
@@ -103,87 +129,133 @@ class GelfRecord
     return fields.containsKey(name);
   }
 
-  public void save(PrintStream printer) throws IOException
+  public void save(PrintStream printer)
   {
-    printer.write('{');
+    printer.print('{');
 
-    write(printer, "version", version);
-    printer.write(',');
-    
+    print(printer, "version", version);
+    printer.print(',');
+
     if(host != null) {
-      write(printer, "host", host);
-      printer.write(',');
+      print(printer, "host", host);
+      printer.print(',');
     }
-    
-    write(printer, "short_message", shortMessage);
-    printer.write(',');
+
+    print(printer, "short_message", shortMessage);
+    printer.print(',');
 
     if(fullMessage != null) {
-      write(printer, "full_message", fullMessage);
-      printer.write(',');
+      print(printer, "full_message", fullMessage);
+      printer.print(',');
     }
 
-    write(printer, "timestamp", timestamp);
-    printer.write(',');
-    write(printer, "level", level);
+    print(printer, "timestamp", timestamp);
+    printer.print(',');
+    print(printer, "level", level);
 
     for(String name : fields.keySet()) {
-      printer.write(',');
-      write(printer, '_' + name, fields.get(name));
+      printer.print(',');
+      print(printer, '_' + name, fields.get(name));
     }
 
-    printer.write('}');
+    printer.print('}');
     printer.println();
+    printer.flush();
   }
 
-  private void write(PrintStream printer, String field, Object value) throws IOException
+  private void print(PrintStream printer, String field, Object value)
   {
     if(value == null) {
       return;
     }
 
-    printer.write('"');
-    printer.write(field.getBytes());
-    printer.write('"');
+    printer.print('"');
+    printer.print(field);
+    printer.print('"');
 
-    printer.write(':');
+    printer.print(':');
 
     if(value instanceof String) {
-      printer.write('"');
-      printer.write(((String)value).getBytes());
-      printer.write('"');
+      print(printer, (String)value);
     }
     else if(value instanceof Double) {
-      printer.write(String.format(Locale.ENGLISH, "%.4f", value).getBytes());
+      printer.print(String.format(Locale.ENGLISH, "%.6f", value));
     }
     else if(value instanceof Integer) {
-      printer.write(Integer.toString((int)value).getBytes());
+      printer.print(Integer.toString((int)value));
+    }
+    else if(value instanceof Long) {
+      printer.print(Long.toString((long)value));
     }
     else {
-      printer.write('"');
-      printer.write(value.toString().getBytes());
-      printer.write('"');
+      print(printer, value.toString());
     }
+  }
+
+  private void print(PrintStream printer, String string)
+  {
+    printer.print('"');
+
+    for(int i = 0; i < string.length(); i++) {
+      char c = string.charAt(i);
+      switch(c) {
+      case '\\':
+      case '"':
+        printer.print('\\');
+        printer.print(c);
+        break;
+
+      case '/':
+        printer.print(c);
+        break;
+
+      case '\b':
+        printer.print("\\b");
+        break;
+
+      case '\t':
+        printer.print("\\t");
+        break;
+
+      case '\n':
+        printer.print("\\n");
+        break;
+
+      case '\f':
+        printer.print("\\f");
+        break;
+
+      case '\r':
+        printer.print("\\r");
+        break;
+
+      default:
+        if(c < '\u0020') {
+          String unicode = "000" + Integer.toHexString(c);
+          printer.print("\\u");
+          printer.print(unicode.substring(unicode.length() - 4));
+        }
+        else {
+          printer.print(c);
+        }
+      }
+    }
+
+    printer.print('"');
   }
 
   public byte[] getBytes()
   {
     ByteArrayOutputStream bytes = new ByteArrayOutputStream();
     try {
-      save(new PrintStream(bytes));
+      save(new PrintStream(bytes, false, "UTF-8"));
     }
-    catch(IOException e) {
-      // TODO Auto-generated catch block
-      e.printStackTrace();
-    }
+    catch(UnsupportedEncodingException ignored) {}
     finally {
       try {
         bytes.close();
       }
-      catch(IOException e) {
-        // TODO Auto-generated catch block
-        e.printStackTrace();
-      }
+      catch(IOException e) {}
     }
     return bytes.toByteArray();
   }

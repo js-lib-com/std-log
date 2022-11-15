@@ -5,11 +5,14 @@ import java.io.PrintStream;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.InetAddress;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import com.jslib.api.log.Level;
 
 public class LogPrinter implements Runnable
 {
@@ -19,7 +22,8 @@ public class LogPrinter implements Runnable
    */
   private static final int PRINTER_CLOSE_TIMEOUT = 8000;
 
-  private static final int QUEUE_READ_TIMEOUT = 6000;
+  private static long messageBaseTimestamp;
+  private static int messageOffset;
 
   private final PrintStream printer;
 
@@ -27,34 +31,42 @@ public class LogPrinter implements Runnable
   private final InetAddress serverAddress;
   private final int serverPort;
 
-  private final BlockingQueue<Event> eventsQueue;
+  private final BlockingQueue<GelfRecord> eventsQueue;
 
   private final Thread senderThread;
+  private final AtomicBoolean running;
 
-  public LogPrinter()
+  public LogPrinter(Configuration configuration) throws IOException
   {
-    this.printer = System.out;
-
-    DatagramSocket socket = null;
-    InetAddress serverAddress = null;
-    int serverPort = 12201;
-    try {
-      socket = new DatagramSocket();
-      serverAddress = InetAddress.getByName("log.eonsn.ro");
+    PrintStream printer;
+    switch(configuration.getConsolePrinter()) {
+    case "stdout":
+      printer = System.out;
+      break;
+    case "stderr":
+      printer = System.err;
+      break;
+    default:
+      printer = null;
     }
-    catch(IOException e) {}
-    if(serverAddress == null) {
-      // null socket signals no remote log server; write only to system out
-      socket = null;
-    }
+    this.printer = printer;
 
-    this.socket = socket;
-    this.serverAddress = serverAddress;
-    this.serverPort = serverPort;
+    URI serverAddress = configuration.getServerAddress();
+    if(serverAddress != null) {
+      this.serverPort = serverAddress.getPort();
+      this.serverAddress = InetAddress.getByName(serverAddress.getHost());
+      this.socket = new DatagramSocket();
+    }
+    else {
+      this.serverPort = 0;
+      this.serverAddress = null;
+      this.socket = null;
+    }
 
     this.eventsQueue = new ArrayBlockingQueue<>(100);
 
     this.senderThread = new Thread(this);
+    this.running = new AtomicBoolean();
     this.senderThread.setDaemon(true);
     this.senderThread.setName("std-log-printer");
     this.senderThread.start();
@@ -62,10 +74,46 @@ public class LogPrinter implements Runnable
 
   public void write(String loggerName, Level level, String message, Object... arguments)
   {
-    LogEvent logEvent = new LogEvent(loggerName, level, message, arguments);
+    assert level != Level.OFF;
+
+    GelfRecord record = new GelfRecord(message, arguments);
+
+    record.setLevel(LEVELS.get(level));
+
+    if(messageBaseTimestamp < record.getBaseTimestamp()) {
+      messageOffset = -1;
+      messageBaseTimestamp = record.getBaseTimestamp();
+    }
+    ++messageOffset;
+
+    record.setField("log_id", (messageBaseTimestamp << 16) + (messageOffset & 0xFFFF));
+    record.setField("log_name", loggerName);
+    record.setField("log_level", level.name());
+    record.setField("log_level_ordinal", level.ordinal());
+    record.setField("log_thread", Thread.currentThread().getName());
+
+    StackTraceElement[] stackTrace = Thread.currentThread().getStackTrace();
+    // 0 - current thread class from where stack trace is extracted (Thread.java)
+    // 1 - this logger printer class (LogPrinter.java)
+    // 2 - logger implementation class (LogImpl.java)
+    // 3 - source class where logger was invoked
+    if(stackTrace.length > 3) {
+      StackTraceElement stackElement = stackTrace[3];
+      record.setField("log_class", stackElement.getClassName());
+      record.setField("log_method", stackElement.getMethodName());
+      if(stackElement.getLineNumber() >= 0) {
+        record.setField("log_file", stackElement.getFileName());
+        record.setField("log_line", stackElement.getLineNumber());
+      }
+    }
+
+    LogContextImpl.get().forEach((name, value) -> {
+      record.setField(name, value);
+    });
+
     for(;;) {
       try {
-        eventsQueue.put(logEvent);
+        eventsQueue.put(record);
         break;
       }
       catch(InterruptedException e) {}
@@ -78,52 +126,18 @@ public class LogPrinter implements Runnable
   @Override
   public void run()
   {
-    LogEvent logEvent = null;
+    GelfRecord record = null;
+    running.set(true);
 
-    for(;;) {
+    while(running.get() || !eventsQueue.isEmpty()) {
       try {
-        if(logEvent == null) {
-          Event event = eventsQueue.poll(QUEUE_READ_TIMEOUT, TimeUnit.MILLISECONDS);
-          if(event == null) {
-            continue;
-          }
-          if(event instanceof ShutdownEvent) {
-            break;
-          }
-          logEvent = (LogEvent)event;
-        }
-
-        GelfRecord record = new GelfRecord();
-        // full message is original message, with parameters not resolved
-        record.setFullMessage(logEvent.getMessage());
-
-        record.setTimestamp(logEvent.getTimestamp() / 1000.0);
-        assert logEvent.getLevel() != Level.OFF;
-        record.setLevel(LEVELS.get(logEvent.getLevel()));
-
-        record.setField("log_name", logEvent.getLoggerName());
-        record.setField("log_level", logEvent.getLevel().name());
-        record.setField("log_thread", logEvent.getThreadName());
-
-        // include log context as custom fields before source code details
-        // log context fields have priority and arguments does not override
-        logEvent.getContextParameters().forEach((name, value) -> {
-          record.setField(name, value);
-        });
-
-        StackTraceElement stackElement = logEvent.getLogStackElement();
-        if(stackElement != null) {
-          record.setField("log_class", stackElement.getClassName());
-          record.setField("log_method", stackElement.getMethodName());
-          if(stackElement.getLineNumber() >= 0) {
-            record.setField("log_file", stackElement.getFileName());
-            record.setField("log_line", stackElement.getLineNumber());
-          }
+        if(record == null) {
+          record = eventsQueue.take();
         }
 
         // include arguments as custom fields
         LogParser parser = new LogParser();
-        String shortMessage = parser.parse(logEvent.getMessage(), logEvent.getArguments());
+        String message = parser.parse(record.getMessage(), record.getArguments());
 
         for(String name : parser.getParameters().keySet()) {
           if(!record.hasField(name)) {
@@ -132,34 +146,34 @@ public class LogPrinter implements Runnable
         }
 
         // short message is message with parameters resolved
-        record.setShortMessage(shortMessage);
+        record.setShortMessage(message);
+        // GELF full message is for, usually large, extra data like context dump
+        record.setFullMessage(parser.getMessageExtra());
 
         final byte[] buffer = record.getBytes();
         if(socket != null) {
           DatagramPacket packet = new DatagramPacket(buffer, buffer.length, serverAddress, serverPort);
           socket.send(packet);
         }
-        printer.write(buffer);
-        logEvent = null;
+        if(printer != null) {
+          printer.write(buffer);
+        }
+        record = null;
       }
       catch(InterruptedException e) {
-        // continue outer while loop that is checking for running flag state
       }
       catch(Exception e) {
         // on exception log event instance is not nullified and no new event extracted from queue
       }
     }
-    System.err.printf("Thread %s closed.%n", Thread.currentThread().getName());
-  }
 
-  public void printStackTrace(Throwable throwable)
-  {
-    throwable.printStackTrace(printer);
+    System.err.printf("Thread %s closed.%n", Thread.currentThread().getName());
   }
 
   public void close()
   {
-    eventsQueue.offer(new ShutdownEvent());
+    running.set(false);
+    senderThread.interrupt();
 
     long closeTimeMillis = System.currentTimeMillis() + PRINTER_CLOSE_TIMEOUT;
     while(closeTimeMillis > System.currentTimeMillis()) {
@@ -170,7 +184,6 @@ public class LogPrinter implements Runnable
       catch(InterruptedException e) {}
     }
 
-    printer.close();
     if(socket != null) {
       socket.close();
     }

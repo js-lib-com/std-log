@@ -1,5 +1,6 @@
 package com.jslib.std.log;
 
+import com.jslib.api.log.Level;
 import com.jslib.api.log.Log;
 
 class LogImpl implements Log
@@ -70,7 +71,7 @@ class LogImpl implements Log
   public void warn(Throwable throwable)
   {
     if(level.ordinal() >= Level.WARN.ordinal()) {
-      printer.write(name, Level.WARN, throwable(throwable));
+      printer.write(name, Level.WARN, Strings.throwable(throwable));
     }
   }
 
@@ -86,7 +87,7 @@ class LogImpl implements Log
   public void error(Throwable throwable)
   {
     if(level.ordinal() >= Level.ERROR.ordinal()) {
-      printer.write(name, Level.ERROR, throwable(throwable));
+      printer.write(name, Level.ERROR, Strings.throwable(throwable));
     }
   }
 
@@ -102,16 +103,23 @@ class LogImpl implements Log
   public void fatal(Throwable throwable)
   {
     if(level.ordinal() >= Level.FATAL.ordinal()) {
-      printer.write(name, Level.FATAL, throwable(throwable));
+      printer.write(name, Level.FATAL, Strings.throwable(throwable));
     }
   }
+
+  private static final String STACK_TRACE_HEADING = " Stack trace dump:{__message_extra__}";
 
   @Override
   public void dump(String message, Throwable throwable)
   {
     if(level.ordinal() >= Level.FATAL.ordinal()) {
-      printer.write(name, Level.FATAL, message);
-      printer.printStackTrace(throwable);
+      if(message != null) {
+        message += STACK_TRACE_HEADING;
+      }
+      else {
+        message = STACK_TRACE_HEADING;
+      }
+      printer.write(name, Level.FATAL, message, Strings.stackTrace(throwable));
     }
   }
 
@@ -119,39 +127,14 @@ class LogImpl implements Log
   public void dump(Throwable throwable)
   {
     if(level.ordinal() >= Level.FATAL.ordinal()) {
-      printer.printStackTrace(throwable);
-    }
-  }
-
-  private static String throwable(Throwable throwable)
-  {
-    if(throwable == null) {
-      return null;
-    }
-    if(throwable.getCause() == null) {
-      return throwable.getMessage();
-    }
-
-    int nestingLevel = 0;
-    StringBuilder sb = new StringBuilder();
-    for(;;) {
-      sb.append(throwable.getClass().getName());
-      sb.append(":");
-      sb.append(" ");
-      if(++nestingLevel == 8) {
-        sb.append("...");
-        break;
+      String message;
+      if(throwable.getMessage() != null) {
+        message = Strings.throwable(throwable) + STACK_TRACE_HEADING;
       }
-      if(throwable.getCause() == null) {
-        String s = throwable.getMessage();
-        if(s == null) {
-          throwable.getClass().getCanonicalName();
-        }
-        sb.append(s);
-        break;
+      else {
+        message = STACK_TRACE_HEADING;
       }
-      throwable = throwable.getCause();
+      printer.write(name, Level.FATAL, message, Strings.stackTrace(throwable));
     }
-    return sb.toString();
   }
 }

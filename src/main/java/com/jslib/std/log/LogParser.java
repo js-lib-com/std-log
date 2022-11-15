@@ -10,6 +10,7 @@ import java.util.Map;
 public class LogParser
 {
   private final Map<String, Object> parameters;
+  private String messageExtra;
 
   public LogParser()
   {
@@ -38,7 +39,17 @@ public class LogParser
           parameter = false;
           // parameter without argument just print original text
           if(argumentIndex < arguments.length) {
-            parameters.put(parameterBuilder.toString(), arguments[argumentIndex]);
+            String parameterName = parameterBuilder.toString();
+            if(parameterName.startsWith("__") && parameterName.endsWith("__")) {
+              messageExtra = arguments[argumentIndex] instanceof String? (String)arguments[argumentIndex]: arguments[argumentIndex].toString();
+              break;
+            }
+            // if argument is present replace {} with argument string representation
+            messageBuilder.append(format(arguments[argumentIndex]));
+            // and store arguments as structured log property, but only if is not anonymous (empty parameter name)
+            if(!parameterName.isEmpty()) {
+              parameters.put(parameterName, arguments[argumentIndex]);
+            }
             ++argumentIndex;
           }
           else {
@@ -53,12 +64,8 @@ public class LogParser
       if(c == '{') {
         parameter = true;
         parameterBuilder.setLength(0);
-        if(argumentIndex < arguments.length) {
-          // if argument is present replace {} with argument string representation
-          messageBuilder.append(arguments[argumentIndex]);
-        }
-        else {
-          // otherwise append '{'
+        if(argumentIndex >= arguments.length) {
+          // if no more arguments append '{'
           messageBuilder.append(c);
         }
         continue;
@@ -79,6 +86,11 @@ public class LogParser
   public Object getParameter(String name)
   {
     return parameters.get(name);
+  }
+
+  public String getMessageExtra()
+  {
+    return messageExtra;
   }
 
   /**
@@ -112,56 +124,7 @@ public class LogParser
     }
 
     for(int i = 0; i < args.length; i++) {
-      // at this point args[i] could be null
-      if(args[i] == null) {
-        continue;
-      }
-
-      if(args[i] instanceof Class) {
-        args[i] = ((Class<?>)args[i]).getCanonicalName();
-      }
-      else if(args[i] instanceof Throwable) {
-        String s = ((Throwable)args[i]).getMessage();
-        if(s == null) {
-          s = args[i].getClass().getCanonicalName();
-        }
-        args[i] = s;
-      }
-      else if(args[i] instanceof Thread) {
-        Thread thread = (Thread)args[i];
-        StringBuilder sb = new StringBuilder();
-        sb.append(thread.getName());
-        sb.append(':');
-        sb.append(thread.getId());
-        args[i] = sb.toString();
-      }
-      else if(args[i] instanceof File) {
-        args[i] = ((File)args[i]).getAbsolutePath();
-      }
-      else if(isArrayLike(args[i])) {
-        StringBuilder sb = new StringBuilder();
-        sb.append('[');
-        int index = 0;
-        for(Object object : iterable(args[i])) {
-          if(object == null) {
-            continue;
-          }
-          String value = object instanceof String ? (String)object : object.toString();
-          if(value.isEmpty()) {
-            continue;
-          }
-          if(index++ > 0) {
-            sb.append(',');
-          }
-          if(index == 4) {
-            sb.append("...");
-            break;
-          }
-          sb.append(object);
-        }
-        sb.append(']');
-        args[i] = sb.toString();
-      }
+      args[i] = format(args[i]);
     }
 
     try {
@@ -171,6 +134,68 @@ public class LogParser
       // return unformatted message if format fails
       return message;
     }
+  }
+
+  private static Object format(Object object)
+  {
+    if(object == null) {
+      return null;
+    }
+
+    if(object instanceof Class) {
+      return ((Class<?>)object).getCanonicalName();
+    }
+
+    if(object instanceof Throwable) {
+      StringBuilder sb = new StringBuilder();
+      sb.append(object.getClass().getCanonicalName());
+      String message = ((Throwable)object).getMessage();
+      if(message != null) {
+        sb.append(": ");
+        sb.append(message);
+      }
+      return sb.toString();
+    }
+
+    if(object instanceof Thread) {
+      Thread thread = (Thread)object;
+      StringBuilder sb = new StringBuilder();
+      sb.append(thread.getName());
+      sb.append(':');
+      sb.append(thread.getId());
+      return sb.toString();
+    }
+
+    if(object instanceof File) {
+      return ((File)object).getAbsolutePath();
+    }
+
+    if(isArrayLike(object)) {
+      StringBuilder sb = new StringBuilder();
+      sb.append('[');
+      int index = 0;
+      for(Object item : iterable(object)) {
+        if(item == null) {
+          continue;
+        }
+        String value = item instanceof String ? (String)item : item.toString();
+        if(value.isEmpty()) {
+          continue;
+        }
+        if(index++ > 0) {
+          sb.append(',');
+        }
+        if(index == 4) {
+          sb.append("...");
+          break;
+        }
+        sb.append(item);
+      }
+      sb.append(']');
+      return sb.toString();
+    }
+
+    return object;
   }
 
   /** Ellipsis constant. */

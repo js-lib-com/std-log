@@ -1,9 +1,11 @@
 package com.jslib.std.log;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
 import com.jslib.api.log.Log;
+import com.jslib.api.log.LogConfig;
 import com.jslib.api.log.LogContext;
 import com.jslib.api.log.LogProvider;
 
@@ -13,13 +15,19 @@ public class LogProviderImpl implements LogProvider, Configuration.LevelListener
   private final LogPrinter printer;
   private final List<LogImpl> loggers;
 
-  public LogProviderImpl()
+  public LogProviderImpl() throws IOException
   {
     this.configuration = new Configuration();
-    this.printer = new LogPrinter();
+    this.printer = new LogPrinter(this.configuration);
     this.configuration.setLevelListener(this);
 
     this.loggers = new ArrayList<>();
+  }
+
+  @Override
+  public LogConfig getLogConfig()
+  {
+    return configuration;
   }
 
   @Override
@@ -31,7 +39,7 @@ public class LogProviderImpl implements LogProvider, Configuration.LevelListener
   @Override
   public Log getLogger(String loggerName)
   {
-    return new LogImpl(printer, loggerName, configuration.getLevel(loggerName));
+    return new LogImpl(printer, loggerName, configuration.getLoggerLevel(loggerName));
   }
 
   @Override
@@ -43,6 +51,6 @@ public class LogProviderImpl implements LogProvider, Configuration.LevelListener
   @Override
   public void onLevelChange()
   {
-    loggers.forEach(logger -> logger.setLevel(configuration.getLevel(logger.getName())));
+    loggers.forEach(logger -> logger.setLevel(configuration.getLoggerLevel(logger.getName())));
   }
 }

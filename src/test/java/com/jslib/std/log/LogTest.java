@@ -40,6 +40,11 @@ public class LogTest
   }
 
   @Test
+  public void anonymousParameter() throws InterruptedException {
+    log.trace("trace test {}", "John Doe");
+  }
+  
+  @Test
   public void secondTest()
   {
     for(int i = 0; i < 10; i++) {

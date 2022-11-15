@@ -38,6 +38,12 @@ class LogContextImpl implements LogContext
     values.put(name, value);
   }
 
+  @Override
+  public String get(String name)
+  {
+    return values.get(name);
+  }
+
   public void forEach(BiConsumer<String, String> consumer)
   {
     values.forEach(consumer);
