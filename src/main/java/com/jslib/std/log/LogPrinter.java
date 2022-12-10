@@ -131,10 +131,13 @@ public class LogPrinter implements Runnable
 
     while(running.get() || !eventsQueue.isEmpty()) {
       try {
-        if(record == null) {
-          record = eventsQueue.take();
-        }
+        record = eventsQueue.take();
+      }
+      catch(InterruptedException e) {
+        continue;
+      }
 
+      try {
         // include arguments as custom fields
         LogParser parser = new LogParser();
         String message = parser.parse(record.getMessage(), record.getArguments());
@@ -149,21 +152,25 @@ public class LogPrinter implements Runnable
         record.setShortMessage(message);
         // GELF full message is for, usually large, extra data like context dump
         record.setFullMessage(parser.getMessageExtra());
+      }
+      catch(Throwable t) {
+        if(printer != null) {
+          printer.printf("Fail to process GELF record: %s. Exception: %s: %s%n", record.getMessage(), t.getClass().getCanonicalName(), t.getMessage());
+        }
+        continue;
+      }
 
-        final byte[] buffer = record.getBytes();
+      final byte[] buffer = record.getBytes();
+      try {
         if(socket != null) {
           DatagramPacket packet = new DatagramPacket(buffer, buffer.length, serverAddress, serverPort);
           socket.send(packet);
         }
-        if(printer != null) {
-          printer.write(buffer);
-        }
-        record = null;
       }
-      catch(InterruptedException e) {
-      }
-      catch(Exception e) {
-        // on exception log event instance is not nullified and no new event extracted from queue
+      catch(Throwable t) {}
+
+      if(printer != null) {
+        printer.write(buffer, 0, buffer.length);
       }
     }
 

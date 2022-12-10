@@ -266,7 +266,6 @@ public class LogParser
             return index < Array.getLength(array);
           }
 
-          @SuppressWarnings("unqualified-field-access")
           @Override
           public Object next()
           {
