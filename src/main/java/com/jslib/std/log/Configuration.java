@@ -14,8 +14,17 @@ import com.jslib.api.log.LogConfig;
 
 class Configuration implements LogConfig
 {
-  private static final String LEVEL_PREFIX = "level.";
+  private static final String SYSTEM_PROPERTY = "STD_LOG";
+  private static final String RESOURCE_FILE = "/std-log.properties";
+  
+  private static final String PROP_LOG_TRANSACTION = "log.transaction";
+  private static final String PROP_LOG_SERVER = "log.server";
+  private static final String PROP_CONSOLE_PRINTER = "console.printer";
 
+  private static final String LEVEL_PREFIX = "level.";
+  private static final String STDOUT = "stdout";
+
+  private boolean logTransaction;
   private Level rootLevel;
   private List<LevelConfig> levelsConfig;
   private URI serverAddress;
@@ -57,26 +66,38 @@ class Configuration implements LogConfig
     this.levelsConfig.sort((x, y) -> Integer.compare(y.loggerPattern.length(), x.loggerPattern.length()));
     this.rootLevel = rootLevel;
 
-    String serverAddress = properties.getProperty("log.server");
+    this.logTransaction = Boolean.parseBoolean(properties.getProperty(PROP_LOG_TRANSACTION));
+
+    String serverAddress = properties.getProperty(PROP_LOG_SERVER);
     if(serverAddress != null) {
       this.serverAddress = URI.create(serverAddress);
     }
-    
-    this.consolePrinter = properties.getProperty("console.printer", "stdout");
+
+    this.consolePrinter = properties.getProperty(PROP_CONSOLE_PRINTER, STDOUT);
   }
 
   private static InputStream propertiesStream() throws FileNotFoundException
   {
-    String propertiesPath = System.getProperty("STD_LOG");
+    String propertiesPath = System.getProperty(SYSTEM_PROPERTY);
     if(propertiesPath != null) {
       return new FileInputStream(propertiesPath);
     }
-    return Configuration.class.getResourceAsStream("/std-log.properties");
+    return Configuration.class.getResourceAsStream(RESOURCE_FILE);
   }
 
   public void setLevelListener(LevelListener listener)
   {
 
+  }
+
+  public boolean isLogTransaction()
+  {
+    return logTransaction;
+  }
+
+  public void setLogTransaction(boolean logTransaction)
+  {
+    this.logTransaction = logTransaction;
   }
 
   @Override

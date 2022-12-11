@@ -119,7 +119,7 @@ class GelfRecord
     fields.put(name, value);
   }
 
-  public Object getFiled(String name)
+  public Object getField(String name)
   {
     return fields.get(name);
   }

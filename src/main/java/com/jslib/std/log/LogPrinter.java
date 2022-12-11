@@ -7,14 +7,16 @@ import java.net.DatagramSocket;
 import java.net.InetAddress;
 import java.net.URI;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.jslib.api.log.Level;
+import com.jslib.api.log.LogTransaction;
 
-public class LogPrinter implements Runnable
+public class LogPrinter implements LogTransaction, Runnable
 {
   /**
    * Milliseconds to wait for log printer close. This timeout is to allow sender thread to flush log events queue. All
@@ -31,7 +33,9 @@ public class LogPrinter implements Runnable
   private final InetAddress serverAddress;
   private final int serverPort;
 
-  private final BlockingQueue<GelfRecord> eventsQueue;
+  private final ThreadLocal<BlockingQueue<GelfRecord>> threadLogsQueue;
+  private final ThreadLocal<Boolean> threadTransaction;
+  private final BlockingQueue<GelfRecord> logsQueue;
 
   private final Thread senderThread;
   private final AtomicBoolean running;
@@ -63,13 +67,67 @@ public class LogPrinter implements Runnable
       this.socket = null;
     }
 
-    this.eventsQueue = new ArrayBlockingQueue<>(100);
+    this.threadLogsQueue = new ThreadLocal<>();
+    this.threadTransaction = new ThreadLocal<>();
+    this.logsQueue = new LinkedBlockingQueue<>();
 
     this.senderThread = new Thread(this);
     this.running = new AtomicBoolean();
     this.senderThread.setDaemon(true);
     this.senderThread.setName("std-log-printer");
     this.senderThread.start();
+  }
+
+  @Override
+  public void beginTransaction()
+  {
+    BlockingQueue<GelfRecord> queue = threadLogsQueue.get();
+    if(queue == null) {
+      queue = new LinkedBlockingQueue<>();
+      threadLogsQueue.set(queue);
+    }
+    threadTransaction.set(true);
+  }
+
+  @Override
+  public void commitTransaction()
+  {
+    BlockingQueue<GelfRecord> queue = threadLogsQueue.get();
+    if(queue == null) {
+      return;
+    }
+
+    Iterator<GelfRecord> records = queue.iterator();
+    while(records.hasNext()) {
+      GelfRecord record = records.next();
+      Object value = record.getField("log_level_ordinal");
+      if(value != null && value instanceof Integer) {
+        Integer level = (Integer)value;
+        if(level <= Level.INFO.ordinal()) {
+          enqueue(logsQueue, record);
+        }
+      }
+    }
+    
+    queue.clear();
+    threadTransaction.set(true);
+  }
+
+  @Override
+  public void rollbackTransaction()
+  {
+    BlockingQueue<GelfRecord> queue = threadLogsQueue.get();
+    if(queue == null) {
+      return;
+    }
+
+    Iterator<GelfRecord> records = queue.iterator();
+    while(records.hasNext()) {
+      enqueue(logsQueue, records.next());
+    }
+    
+    queue.clear();
+    threadTransaction.set(true);
   }
 
   public void write(String loggerName, Level level, String message, Object... arguments)
@@ -111,14 +169,25 @@ public class LogPrinter implements Runnable
       record.setField(name, value);
     });
 
+    BlockingQueue<GelfRecord> threadQueue = threadLogsQueue.get();
+    if(threadTransaction.get() != null && threadTransaction.get() && threadQueue != null) {
+      enqueue(threadQueue, record);
+    }
+    else {
+      enqueue(logsQueue, record);
+    }
+  }
+
+  private static void enqueue(BlockingQueue<GelfRecord> queue, GelfRecord record)
+  {
     for(;;) {
       try {
-        eventsQueue.put(record);
+        queue.put(record);
         break;
       }
       catch(InterruptedException e) {}
       catch(Exception e) {
-        System.err.printf("Fail to enqueue log event. Root cause: %s. Log message lost: %s%n", e.getMessage(), message);
+        System.err.printf("Fail to enqueue log event. Root cause: %s. Log message lost: %s%n", e.getMessage(), record.getMessage());
       }
     }
   }
@@ -129,9 +198,9 @@ public class LogPrinter implements Runnable
     GelfRecord record = null;
     running.set(true);
 
-    while(running.get() || !eventsQueue.isEmpty()) {
+    while(running.get() || !logsQueue.isEmpty()) {
       try {
-        record = eventsQueue.take();
+        record = logsQueue.take();
       }
       catch(InterruptedException e) {
         continue;
