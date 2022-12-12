@@ -33,8 +33,13 @@ public class LogPrinter implements LogTransaction, Runnable
   private final InetAddress serverAddress;
   private final int serverPort;
 
-  private final ThreadLocal<BlockingQueue<GelfRecord>> threadLogsQueue;
-  private final ThreadLocal<Boolean> threadTransaction;
+  private static final class Transaction
+  {
+    final BlockingQueue<GelfRecord> queue = new LinkedBlockingQueue<>();
+    boolean active;
+  }
+
+  private final ThreadLocal<Transaction> threadTransaction;
   private final BlockingQueue<GelfRecord> logsQueue;
 
   private final Thread senderThread;
@@ -67,7 +72,6 @@ public class LogPrinter implements LogTransaction, Runnable
       this.socket = null;
     }
 
-    this.threadLogsQueue = new ThreadLocal<>();
     this.threadTransaction = new ThreadLocal<>();
     this.logsQueue = new LinkedBlockingQueue<>();
 
@@ -81,23 +85,23 @@ public class LogPrinter implements LogTransaction, Runnable
   @Override
   public void beginTransaction()
   {
-    BlockingQueue<GelfRecord> queue = threadLogsQueue.get();
-    if(queue == null) {
-      queue = new LinkedBlockingQueue<>();
-      threadLogsQueue.set(queue);
+    Transaction transaction = threadTransaction.get();
+    if(transaction == null) {
+      transaction = new Transaction();
+      threadTransaction.set(transaction);
     }
-    threadTransaction.set(true);
+    transaction.active = true;
   }
 
   @Override
   public void commitTransaction()
   {
-    BlockingQueue<GelfRecord> queue = threadLogsQueue.get();
-    if(queue == null) {
+    Transaction transaction = threadTransaction.get();
+    if(transaction == null) {
       return;
     }
 
-    Iterator<GelfRecord> records = queue.iterator();
+    Iterator<GelfRecord> records = transaction.queue.iterator();
     while(records.hasNext()) {
       GelfRecord record = records.next();
       Object value = record.getField("log_level_ordinal");
@@ -108,26 +112,26 @@ public class LogPrinter implements LogTransaction, Runnable
         }
       }
     }
-    
-    queue.clear();
-    threadTransaction.set(true);
+
+    transaction.queue.clear();
+    transaction.active = false;
   }
 
   @Override
   public void rollbackTransaction()
   {
-    BlockingQueue<GelfRecord> queue = threadLogsQueue.get();
-    if(queue == null) {
+    Transaction transaction = threadTransaction.get();
+    if(transaction == null) {
       return;
     }
 
-    Iterator<GelfRecord> records = queue.iterator();
+    Iterator<GelfRecord> records = transaction.queue.iterator();
     while(records.hasNext()) {
       enqueue(logsQueue, records.next());
     }
-    
-    queue.clear();
-    threadTransaction.set(true);
+
+    transaction.queue.clear();
+    transaction.active = false;
   }
 
   public void write(String loggerName, Level level, String message, Object... arguments)
@@ -169,9 +173,17 @@ public class LogPrinter implements LogTransaction, Runnable
       record.setField(name, value);
     });
 
-    BlockingQueue<GelfRecord> threadQueue = threadLogsQueue.get();
-    if(threadTransaction.get() != null && threadTransaction.get() && threadQueue != null) {
-      enqueue(threadQueue, record);
+    String traceTimestamp = (String)record.getField("trace_timestamp");
+    if(traceTimestamp != null) {
+      try {
+        record.setField("trace_offset", (System.nanoTime() - Long.parseLong(traceTimestamp)) / 1000.0D);
+      }
+      catch(Throwable unused) {}
+    }
+
+    Transaction transaction = threadTransaction.get();
+    if(transaction != null && transaction.active) {
+      enqueue(transaction.queue, record);
     }
     else {
       enqueue(logsQueue, record);
