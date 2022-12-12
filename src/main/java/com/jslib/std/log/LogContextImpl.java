@@ -8,7 +8,10 @@ import com.jslib.api.log.LogContext;
 
 class LogContextImpl implements LogContext
 {
-  private static final InheritableThreadLocal<LogContextImpl> threadContext = new InheritableThreadLocal<>();
+  // warning: avoid using inheritable thread local
+  // if happens that LogContextImpl.get() to be called from main thread, ALL APPLICATION THREADS created after that will
+  // inherit log context created by main thread and context data is mixed up between threads
+  private static final ThreadLocal<LogContextImpl> threadContext = new ThreadLocal<>();
 
   public static LogContextImpl get()
   {
