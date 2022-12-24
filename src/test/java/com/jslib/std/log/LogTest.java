@@ -58,6 +58,17 @@ public class LogTest
   }
   
   @Test
+  public void GivenJsonObject_WhenLog_ThenPreserveCurlyBraces() {
+    // given
+    String json = "{\"tickets0\": {},\"ticketCount\": 0}";
+    
+    // when
+    log.debug(json);
+    
+    //then
+  }
+  
+  @Test
   public void Given_When_Then() {
     // given
     

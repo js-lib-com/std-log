@@ -19,6 +19,10 @@ public class LogParser
 
   public String parse(String message, Object... arguments)
   {
+    if(arguments.length == 0) {
+      return message;
+    }
+    
     StringBuilder messageBuilder = new StringBuilder();
     StringBuilder parameterBuilder = new StringBuilder();
 
