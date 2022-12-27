@@ -27,6 +27,7 @@ public class LogPrinter implements LogTransaction, Runnable
   private static long messageBaseTimestamp;
   private static int messageOffset;
 
+  private final Map<String, String> contextParameters;
   private final PrintStream printer;
 
   private final DatagramSocket socket;
@@ -47,6 +48,8 @@ public class LogPrinter implements LogTransaction, Runnable
 
   public LogPrinter(Configuration configuration) throws IOException
   {
+    this.contextParameters = configuration.getContextParameters();
+
     PrintStream printer;
     switch(configuration.getConsolePrinter()) {
     case "stdout":
@@ -223,6 +226,12 @@ public class LogPrinter implements LogTransaction, Runnable
         LogParser parser = new LogParser();
         String message = parser.parse(record.getMessage(), record.getArguments());
 
+        for(String name : contextParameters.keySet()) {
+          if(!record.hasField(name)) {
+            record.setField(name, contextParameters.get(name));
+          }
+        }
+        
         for(String name : parser.getParameters().keySet()) {
           if(!record.hasField(name)) {
             record.setField(name, parser.getParameter(name));

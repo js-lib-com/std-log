@@ -6,7 +6,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 import com.jslib.api.log.Level;
@@ -16,7 +18,9 @@ class Configuration implements LogConfig
 {
   private static final String SYSTEM_PROPERTY = "STD_LOG";
   private static final String RESOURCE_FILE = "/std-log.properties";
-  
+
+  private static final String CONTEXT_PARAMETERS_PREFIX = "context.";
+
   private static final String PROP_LOG_TRANSACTION = "log.transaction";
   private static final String PROP_LOG_SERVER = "log.server";
   private static final String PROP_CONSOLE_PRINTER = "console.printer";
@@ -29,6 +33,7 @@ class Configuration implements LogConfig
   private List<LevelConfig> levelsConfig;
   private URI serverAddress;
   private String consolePrinter;
+  private final Map<String, String> contextParameters;
 
   public Configuration()
   {
@@ -44,10 +49,14 @@ class Configuration implements LogConfig
     this.levelsConfig = new ArrayList<>();
     Level rootLevel = Level.ALL;
 
+    this.contextParameters = new HashMap<>();
+
     for(Object key : properties.keySet()) {
       String propertyName = (String)key;
-
-      // process non level properties
+      if(propertyName.startsWith(CONTEXT_PARAMETERS_PREFIX)) {
+        this.contextParameters.put(propertyName.substring(CONTEXT_PARAMETERS_PREFIX.length()), properties.getProperty(propertyName));
+        continue;
+      }
 
       if(!propertyName.startsWith(LEVEL_PREFIX)) {
         continue;
@@ -83,6 +92,11 @@ class Configuration implements LogConfig
       return new FileInputStream(propertiesPath);
     }
     return Configuration.class.getResourceAsStream(RESOURCE_FILE);
+  }
+
+  public Map<String, String> getContextParameters()
+  {
+    return contextParameters;
   }
 
   public void setLevelListener(LevelListener listener)
